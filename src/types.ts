@@ -42,3 +42,12 @@ export interface HistoryPoint {
   time: number;
   value: number;
 }
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size_bytes: number;
+  child_count: number | null;
+  is_hidden: boolean;
+}

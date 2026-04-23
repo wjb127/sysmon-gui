@@ -39,6 +39,17 @@ pub struct ProcessInfo {
     pub status: String,
 }
 
+// 디렉토리 엔트리 정보
+#[derive(Serialize, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size_bytes: u64,       // 파일: 실제 크기, 디렉토리: 0
+    pub child_count: Option<u32>, // 디렉토리만: 직접 자식 수 (읽기 실패 시 None)
+    pub is_hidden: bool,
+}
+
 // 전체 시스템 메트릭
 #[derive(Serialize, Clone)]
 pub struct SystemMetrics {
@@ -133,11 +144,49 @@ fn get_metrics(state: State<AppState>) -> SystemMetrics {
     }
 }
 
+#[tauri::command]
+fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
+    let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
+    let mut result: Vec<DirEntry> = entries
+        .flatten()
+        .map(|entry| {
+            let meta = entry.metadata().ok();
+            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let size_bytes = if is_dir { 0 } else { meta.as_ref().map(|m| m.len()).unwrap_or(0) };
+            let child_count = if is_dir {
+                std::fs::read_dir(entry.path()).ok().map(|d| d.count() as u32)
+            } else {
+                None
+            };
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_hidden = name.starts_with('.');
+            DirEntry {
+                name,
+                path: entry.path().to_string_lossy().to_string(),
+                is_dir,
+                size_bytes,
+                child_count,
+                is_hidden,
+            }
+        })
+        .collect();
+    // 정렬: 디렉토리 먼저 (이름순), 파일은 크기 내림차순
+    result.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, true) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            (false, false) => b.size_bytes.cmp(&a.size_bytes),
+        }
+    });
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState(Mutex::new(System::new_all())))
-        .invoke_handler(tauri::generate_handler![get_metrics])
+        .invoke_handler(tauri::generate_handler![get_metrics, read_dir_entries])
         .run(tauri::generate_context!())
         .expect("Tauri 앱 실행 중 오류 발생");
 }
