@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { DiskMetrics, DirEntry } from "../types";
 
 function barColor(pct: number) {
@@ -33,18 +34,47 @@ export function DiskPanel({ disks }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
+  const unlistenRef = useRef<(() => void) | null>(null);
+
+  // 컴포넌트 언마운트 시 이벤트 리스너 정리
+  useEffect(() => {
+    return () => { unlistenRef.current?.(); };
+  }, []);
 
   async function navigateTo(path: string, _name: string, newCrumbs: { name: string; path: string }[]) {
+    // 이전 리스너 정리
+    unlistenRef.current?.();
+    unlistenRef.current = null;
+
     setLoading(true);
     setError(null);
     try {
+      // 1. 엔트리 즉시 반환 (디렉토리 크기=0)
       const result = await invoke<DirEntry[]>("read_dir_entries", { path });
       setEntries(result);
       setCurrentPath(path);
       setBreadcrumbs(newCrumbs);
+      setLoading(false);
+
+      // 2. 이벤트 리스너 등록
+      const unlisten = await listen<{ path: string; size_bytes: number }>(
+        "dir-size-result",
+        (event) => {
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.path === event.payload.path
+                ? { ...e, size_bytes: event.payload.size_bytes }
+                : e
+            )
+          );
+        }
+      );
+      unlistenRef.current = unlisten;
+
+      // 3. 백그라운드 크기 계산 시작
+      invoke("start_dir_sizes", { path }).catch(() => {});
     } catch (e) {
       setError(String(e));
-    } finally {
       setLoading(false);
     }
   }
@@ -66,6 +96,8 @@ export function DiskPanel({ disks }: Props) {
 
   function goBack() {
     if (breadcrumbs.length <= 1) {
+      unlistenRef.current?.();
+      unlistenRef.current = null;
       setCurrentPath(null);
       setBreadcrumbs([]);
       setEntries([]);
@@ -238,9 +270,12 @@ export function DiskPanel({ disks }: Props) {
             </span>
 
             {/* 우측 정보 */}
-            <div className="flex-shrink-0 text-right">
-              <div className="text-[10px] text-gray-400 tabular-nums">
-                {entry.size_bytes > 0 ? formatBytes(entry.size_bytes) : entry.is_dir ? "—" : "0 B"}
+            <div className="flex-shrink-0 text-right min-w-[56px]">
+              <div className="text-[10px] tabular-nums">
+                {entry.is_dir && entry.size_bytes === 0
+                  ? <span className="text-gray-600 animate-pulse">…</span>
+                  : <span className="text-gray-400">{formatBytes(entry.size_bytes)}</span>
+                }
               </div>
               {entry.is_dir && entry.child_count != null && (
                 <div className="text-[9px] text-gray-600">{entry.child_count} items</div>

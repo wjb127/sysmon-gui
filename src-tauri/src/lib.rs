@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::sync::Mutex;
 use sysinfo::{Disks, System, Users};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 // CPU 메트릭
 #[derive(Serialize, Clone)]
@@ -199,9 +199,15 @@ fn dir_size(path: &std::path::Path) -> u64 {
         .sum()
 }
 
+// 디렉토리 크기 스트리밍 결과
+#[derive(Serialize, Clone)]
+struct DirSizeResult {
+    path: String,
+    size_bytes: u64,
+}
+
 #[tauri::command]
 fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
-    // 먼저 목록을 수집한 뒤 Rayon으로 병렬 크기 계산
     let raw: Vec<_> = std::fs::read_dir(&path)
         .map_err(|e| e.to_string())?
         .flatten()
@@ -212,12 +218,10 @@ fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
         .map(|entry| {
             let ft = entry.file_type().ok();
             let is_dir = ft.as_ref().map(|f| f.is_dir()).unwrap_or(false);
-            let is_symlink = ft.as_ref().map(|f| f.is_symlink()).unwrap_or(false);
 
-            let size_bytes = if is_symlink {
+            // 파일만 즉시 크기 계산, 디렉토리는 0 (start_dir_sizes로 비동기 계산)
+            let size_bytes = if is_dir {
                 0
-            } else if is_dir {
-                dir_size(&entry.path())
             } else {
                 entry.metadata().map(|m| m.len()).unwrap_or(0)
             };
@@ -241,13 +245,46 @@ fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
         })
         .collect();
 
-    // 디렉토리·파일 모두 크기 내림차순 (디렉토리 먼저)
+    // 디렉토리 먼저(이름순), 파일은 크기 내림차순
     result.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
-        _ => b.size_bytes.cmp(&a.size_bytes),
+        (true, true) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        (false, false) => b.size_bytes.cmp(&a.size_bytes),
     });
     Ok(result)
+}
+
+// 디렉토리 크기를 백그라운드에서 계산하고 이벤트로 스트리밍
+#[tauri::command]
+async fn start_dir_sizes(path: String, app: AppHandle) -> Result<(), String> {
+    let entries: Vec<_> = std::fs::read_dir(&path)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
+
+    for entry in entries {
+        let ft = match entry.file_type() {
+            Ok(ft) if ft.is_dir() => ft,
+            _ => continue,
+        };
+        let _ = ft;
+
+        let app = app.clone();
+        let entry_path = entry.path();
+        let entry_path_str = entry_path.to_string_lossy().to_string();
+
+        // 블로킹 작업을 스레드풀에서 실행, 완료 시 이벤트 emit
+        tokio::task::spawn_blocking(move || {
+            let size = dir_size(&entry_path);
+            let _ = app.emit("dir-size-result", DirSizeResult {
+                path: entry_path_str,
+                size_bytes: size,
+            });
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -257,7 +294,7 @@ pub fn run() {
             Mutex::new(System::new_all()),
             Mutex::new(Users::new_with_refreshed_list()),
         ))
-        .invoke_handler(tauri::generate_handler![get_metrics, read_dir_entries])
+        .invoke_handler(tauri::generate_handler![get_metrics, read_dir_entries, start_dir_sizes])
         .run(tauri::generate_context!())
         .expect("Tauri 앱 실행 중 오류 발생");
 }
