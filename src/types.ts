@@ -26,6 +26,12 @@ export interface ProcessInfo {
   cpu_percent: number;
   memory_mb: number;
   status: string;
+  exe_path: string;
+  cmd: string;
+  user: string;
+  parent_pid: number | null;
+  start_time: number;
+  run_time: number;
 }
 
 export interface SystemMetrics {

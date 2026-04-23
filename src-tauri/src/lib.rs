@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 use serde::Serialize;
 use std::sync::Mutex;
-use sysinfo::{Disks, System};
+use sysinfo::{Disks, System, Users};
 use tauri::State;
 
 // CPU 메트릭
@@ -38,6 +38,12 @@ pub struct ProcessInfo {
     pub cpu_percent: f32,
     pub memory_mb: f64,
     pub status: String,
+    pub exe_path: String,
+    pub cmd: String,
+    pub user: String,
+    pub parent_pid: Option<u32>,
+    pub start_time: u64,
+    pub run_time: u64,
 }
 
 // 디렉토리 엔트리 정보
@@ -62,11 +68,12 @@ pub struct SystemMetrics {
     pub os_version: String,
 }
 
-pub struct AppState(pub Mutex<System>);
+pub struct AppState(pub Mutex<System>, pub Mutex<Users>);
 
 #[tauri::command]
 fn get_metrics(state: State<AppState>) -> SystemMetrics {
     let mut sys = state.0.lock().unwrap();
+    let users = state.1.lock().unwrap();
     sys.refresh_all();
 
     // CPU
@@ -116,20 +123,46 @@ fn get_metrics(state: State<AppState>) -> SystemMetrics {
         })
         .collect();
 
-    // 프로세스 (CPU 사용량 상위 50개)
+    // 프로세스 (상위 100개)
     let mut processes: Vec<ProcessInfo> = sys
         .processes()
         .iter()
-        .map(|(pid, p)| ProcessInfo {
-            pid: pid.as_u32(),
-            name: p.name().to_string_lossy().to_string(),
-            cpu_percent: p.cpu_usage(),
-            memory_mb: p.memory() as f64 / 1024.0 / 1024.0,
-            status: format!("{:?}", p.status()),
+        .map(|(pid, p)| {
+            let user = p
+                .user_id()
+                .and_then(|uid| users.iter().find(|u| u.id() == uid))
+                .map(|u| u.name().to_string())
+                .unwrap_or_default();
+
+            let exe_path = p
+                .exe()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let cmd = p
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            ProcessInfo {
+                pid: pid.as_u32(),
+                name: p.name().to_string_lossy().to_string(),
+                cpu_percent: p.cpu_usage(),
+                memory_mb: p.memory() as f64 / 1024.0 / 1024.0,
+                status: format!("{:?}", p.status()),
+                exe_path,
+                cmd,
+                user,
+                parent_pid: p.parent().map(|p| p.as_u32()),
+                start_time: p.start_time(),
+                run_time: p.run_time(),
+            }
         })
         .collect();
     processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal));
-    processes.truncate(50);
+    processes.truncate(100);
 
     // OS 정보
     let hostname = System::host_name().unwrap_or_default();
@@ -220,7 +253,10 @@ fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(AppState(Mutex::new(System::new_all())))
+        .manage(AppState(
+            Mutex::new(System::new_all()),
+            Mutex::new(Users::new_with_refreshed_list()),
+        ))
         .invoke_handler(tauri::generate_handler![get_metrics, read_dir_entries])
         .run(tauri::generate_context!())
         .expect("Tauri 앱 실행 중 오류 발생");
