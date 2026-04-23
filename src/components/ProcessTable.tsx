@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ProcessInfo } from "../types";
 
@@ -58,10 +58,15 @@ export function ProcessTable({ processes }: ProcessTableProps) {
   }
 
   const stableOrderRef = useRef<number[]>([]);
-  const pidSet = new Set(processes.map((p) => p.pid));
-  const prev = stableOrderRef.current.filter((pid) => pidSet.has(pid));
-  const newPids = processes.map((p) => p.pid).filter((pid) => !prev.includes(pid));
-  stableOrderRef.current = [...prev, ...newPids];
+
+  // 렌더 외부에서 안정적으로 순서 갱신 (Set으로 O(1) 탐색)
+  useEffect(() => {
+    const pidSet = new Set(processes.map((p) => p.pid));
+    const prev = stableOrderRef.current.filter((pid) => pidSet.has(pid));
+    const prevSet = new Set(prev);
+    const newPids = processes.map((p) => p.pid).filter((pid) => !prevSet.has(pid));
+    stableOrderRef.current = [...prev, ...newPids];
+  }, [processes]);
 
   function handleSort(key: NonNullable<SortKey>) {
     if (sortKey !== key) {

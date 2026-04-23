@@ -161,8 +161,8 @@ fn get_metrics(state: State<AppState>) -> SystemMetrics {
             }
         })
         .collect();
-    processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal));
-    processes.truncate(100);
+    // PID 기준 정렬 — 매 폴링마다 순서가 바뀌지 않도록 안정적인 키 사용
+    processes.sort_by_key(|p| p.pid);
 
     // OS 정보
     let hostname = System::host_name().unwrap_or_default();
