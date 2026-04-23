@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::sync::Mutex;
 use sysinfo::{Disks, System, Users};
-use tauri::{AppHandle, Emitter, State};
+use tauri::State;
 
 // CPU 메트릭
 #[derive(Serialize, Clone)]
@@ -226,11 +226,12 @@ fn signal_process(pid: u32, signal: String) -> Result<(), String> {
     }
 }
 
-// 디렉토리 크기 스트리밍 결과
-#[derive(Serialize, Clone)]
-struct DirSizeResult {
-    path: String,
-    size_bytes: u64,
+// 단일 디렉토리 크기 계산 (클릭 시 온디맨드)
+#[tauri::command]
+async fn calc_dir_size(path: String) -> u64 {
+    tokio::task::spawn_blocking(move || dir_size(std::path::Path::new(&path)))
+        .await
+        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -282,37 +283,6 @@ fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(result)
 }
 
-// 디렉토리 크기를 백그라운드에서 계산하고 이벤트로 스트리밍
-#[tauri::command]
-async fn start_dir_sizes(path: String, app: AppHandle) -> Result<(), String> {
-    let entries: Vec<_> = std::fs::read_dir(&path)
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .collect();
-
-    for entry in entries {
-        let ft = match entry.file_type() {
-            Ok(ft) if ft.is_dir() => ft,
-            _ => continue,
-        };
-        let _ = ft;
-
-        let app = app.clone();
-        let entry_path = entry.path();
-        let entry_path_str = entry_path.to_string_lossy().to_string();
-
-        // 블로킹 작업을 스레드풀에서 실행, 완료 시 이벤트 emit
-        tokio::task::spawn_blocking(move || {
-            let size = dir_size(&entry_path);
-            let _ = app.emit("dir-size-result", DirSizeResult {
-                path: entry_path_str,
-                size_bytes: size,
-            });
-        });
-    }
-
-    Ok(())
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -321,7 +291,7 @@ pub fn run() {
             Mutex::new(System::new_all()),
             Mutex::new(Users::new_with_refreshed_list()),
         ))
-        .invoke_handler(tauri::generate_handler![get_metrics, signal_process, read_dir_entries, start_dir_sizes])
+        .invoke_handler(tauri::generate_handler![get_metrics, signal_process, read_dir_entries, calc_dir_size])
         .run(tauri::generate_context!())
         .expect("Tauri 앱 실행 중 오류 발생");
 }
