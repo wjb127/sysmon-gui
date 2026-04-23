@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use serde::Serialize;
 use std::sync::Mutex;
 use sysinfo::{Disks, System};
@@ -144,20 +145,56 @@ fn get_metrics(state: State<AppState>) -> SystemMetrics {
     }
 }
 
+// 디렉토리 재귀 크기 계산 (심링크 제외)
+fn dir_size(path: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| {
+            let Ok(ft) = e.file_type() else { return 0 };
+            if ft.is_symlink() {
+                return 0;
+            }
+            if ft.is_dir() {
+                dir_size(&e.path())
+            } else {
+                e.metadata().map(|m| m.len()).unwrap_or(0)
+            }
+        })
+        .sum()
+}
+
 #[tauri::command]
 fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
-    let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
-    let mut result: Vec<DirEntry> = entries
+    // 먼저 목록을 수집한 뒤 Rayon으로 병렬 크기 계산
+    let raw: Vec<_> = std::fs::read_dir(&path)
+        .map_err(|e| e.to_string())?
         .flatten()
+        .collect();
+
+    let mut result: Vec<DirEntry> = raw
+        .par_iter()
         .map(|entry| {
-            let meta = entry.metadata().ok();
-            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            let size_bytes = if is_dir { 0 } else { meta.as_ref().map(|m| m.len()).unwrap_or(0) };
+            let ft = entry.file_type().ok();
+            let is_dir = ft.as_ref().map(|f| f.is_dir()).unwrap_or(false);
+            let is_symlink = ft.as_ref().map(|f| f.is_symlink()).unwrap_or(false);
+
+            let size_bytes = if is_symlink {
+                0
+            } else if is_dir {
+                dir_size(&entry.path())
+            } else {
+                entry.metadata().map(|m| m.len()).unwrap_or(0)
+            };
+
             let child_count = if is_dir {
                 std::fs::read_dir(entry.path()).ok().map(|d| d.count() as u32)
             } else {
                 None
             };
+
             let name = entry.file_name().to_string_lossy().to_string();
             let is_hidden = name.starts_with('.');
             DirEntry {
@@ -170,14 +207,12 @@ fn read_dir_entries(path: String) -> Result<Vec<DirEntry>, String> {
             }
         })
         .collect();
-    // 정렬: 디렉토리 먼저 (이름순), 파일은 크기 내림차순
-    result.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            (true, true) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            (false, false) => b.size_bytes.cmp(&a.size_bytes),
-        }
+
+    // 디렉토리·파일 모두 크기 내림차순 (디렉토리 먼저)
+    result.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => b.size_bytes.cmp(&a.size_bytes),
     });
     Ok(result)
 }

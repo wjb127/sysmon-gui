@@ -238,12 +238,14 @@ export function DiskPanel({ disks }: Props) {
             </span>
 
             {/* 우측 정보 */}
-            <span className="flex-shrink-0 text-[10px] text-gray-500 tabular-nums">
-              {entry.is_dir
-                ? entry.child_count != null ? `${entry.child_count} items` : "—"
-                : formatBytes(entry.size_bytes)
-              }
-            </span>
+            <div className="flex-shrink-0 text-right">
+              <div className="text-[10px] text-gray-400 tabular-nums">
+                {entry.size_bytes > 0 ? formatBytes(entry.size_bytes) : entry.is_dir ? "—" : "0 B"}
+              </div>
+              {entry.is_dir && entry.child_count != null && (
+                <div className="text-[9px] text-gray-600">{entry.child_count} items</div>
+              )}
+            </div>
 
             {/* 디렉토리 화살표 */}
             {entry.is_dir && (
