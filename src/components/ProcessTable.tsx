@@ -84,39 +84,35 @@ export function ProcessTable({ processes }: ProcessTableProps) {
     "px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-200 select-none";
 
   return (
-    <div className="bg-[#1a1d2e] rounded-xl border border-[#2a2d3e] overflow-hidden">
+    <div className="flex flex-col h-full bg-[#1a1d2e] border-t border-[#2a2d3e] overflow-hidden">
       {/* 헤더: 타이틀 + 검색 */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-[#2a2d3e]">
-        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
-          Processes
-        </h2>
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#2a2d3e] flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Processes</h2>
+          <span className="text-xs text-gray-600">({filtered.length})</span>
+        </div>
         <div className="relative">
           <input
             type="text"
             placeholder="Search..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="bg-[#0f1117] border border-[#2a2d3e] rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 w-48"
+            className="bg-[#0f1117] border border-[#2a2d3e] rounded-lg px-3 py-1 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 w-40"
           />
-          {/* 검색 아이콘 */}
           <svg
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </div>
       </div>
 
       {/* 테이블 */}
-      <div className="overflow-x-auto max-h-[340px] overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-[#151827] sticky top-0">
             <tr>
