@@ -3229,11 +3229,13 @@ dependencies = [
 name = "sysmon-gui"
 version = "0.1.0"
 dependencies = [
+ "rayon",
  "serde",
  "serde_json",
  "sysinfo",
  "tauri",
  "tauri-build",
+ "tokio",
 ]
 
 [[package]]
