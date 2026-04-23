@@ -1,21 +1,19 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import type { ProcessInfo } from "../types";
 
-type SortKey = "name" | "pid" | "cpu_percent" | "memory_mb" | "status";
+type SortKey = "name" | "pid" | "cpu_percent" | "memory_mb" | "status" | null;
 type SortDir = "asc" | "desc";
 
 interface ProcessTableProps {
   processes: ProcessInfo[];
 }
 
-// 메모리 크기를 사람이 읽기 쉬운 포맷으로 변환
 function formatMemory(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
   if (mb >= 1) return `${mb.toFixed(0)} MB`;
   return `${(mb * 1024).toFixed(0)} KB`;
 }
 
-// 상태 텍스트에 따른 배지 색상
 function statusColor(status: string): string {
   const s = status.toLowerCase();
   if (s.includes("run")) return "text-green-400";
@@ -27,57 +25,61 @@ function statusColor(status: string): string {
 
 export function ProcessTable({ processes }: ProcessTableProps) {
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("cpu_percent");
+  // 기본값 null = 정렬 없음 (최초 등장 순서 유지)
+  const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  // 정렬 토글
-  function handleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
+  // 최초 등장 순서를 PID 배열로 고정. 새 PID는 뒤에 추가, 사라진 PID는 제거.
+  const stableOrderRef = useRef<number[]>([]);
+  const pidSet = new Set(processes.map((p) => p.pid));
+  const prev = stableOrderRef.current.filter((pid) => pidSet.has(pid));
+  const newPids = processes.map((p) => p.pid).filter((pid) => !prev.includes(pid));
+  stableOrderRef.current = [...prev, ...newPids];
+
+  // 정렬 클릭: desc → asc → null(원래 순서) 순환
+  function handleSort(key: NonNullable<SortKey>) {
+    if (sortKey !== key) {
       setSortKey(key);
       setSortDir("desc");
+    } else if (sortDir === "desc") {
+      setSortDir("asc");
+    } else {
+      setSortKey(null);
     }
   }
 
-  // 정렬 표시 아이콘
-  function sortIcon(key: SortKey): string {
+  function sortIcon(key: NonNullable<SortKey>): string {
     if (sortKey !== key) return "";
-    return sortDir === "asc" ? " \u25B2" : " \u25BC";
+    return sortDir === "asc" ? " ▲" : " ▼";
   }
 
-  // 필터링 + 정렬
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     const list = processes.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        String(p.pid).includes(q)
+      (p) => p.name.toLowerCase().includes(q) || String(p.pid).includes(q)
     );
 
-    list.sort((a, b) => {
-      let cmp = 0;
-      switch (sortKey) {
-        case "name":
-          cmp = a.name.localeCompare(b.name);
-          break;
-        case "pid":
-          cmp = a.pid - b.pid;
-          break;
-        case "cpu_percent":
-          cmp = a.cpu_percent - b.cpu_percent;
-          break;
-        case "memory_mb":
-          cmp = a.memory_mb - b.memory_mb;
-          break;
-        case "status":
-          cmp = a.status.localeCompare(b.status);
-          break;
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
+    if (sortKey === null) {
+      // 정렬 없음: stableOrderRef 기준으로 배치
+      const pidIndex = new Map(stableOrderRef.current.map((pid, i) => [pid, i]));
+      list.sort((a, b) => (pidIndex.get(a.pid) ?? 0) - (pidIndex.get(b.pid) ?? 0));
+    } else {
+      list.sort((a, b) => {
+        let cmp = 0;
+        switch (sortKey) {
+          case "name": cmp = a.name.localeCompare(b.name); break;
+          case "pid": cmp = a.pid - b.pid; break;
+          case "cpu_percent": cmp = a.cpu_percent - b.cpu_percent; break;
+          case "memory_mb": cmp = a.memory_mb - b.memory_mb; break;
+          case "status": cmp = a.status.localeCompare(b.status); break;
+        }
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+    }
 
     return list;
+  // stableOrderRef는 ref라 deps 불필요 - processes 변경 시마다 재계산
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [processes, search, sortKey, sortDir]);
 
   const headerClass =
