@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ProcessInfo } from "../types";
 
 type SortKey = "name" | "pid" | "cpu_percent" | "memory_mb" | "status" | null;
@@ -41,6 +42,20 @@ export function ProcessTable({ processes }: ProcessTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  const [confirmKill, setConfirmKill] = useState(false);
+  const [signalError, setSignalError] = useState<string | null>(null);
+
+  async function sendSignal(pid: number, signal: string) {
+    setSignalError(null);
+    try {
+      await invoke("signal_process", { pid, signal });
+      if (signal === "kill" || signal === "term") setSelectedPid(null);
+    } catch (e) {
+      setSignalError(String(e));
+    } finally {
+      setConfirmKill(false);
+    }
+  }
 
   const stableOrderRef = useRef<number[]>([]);
   const pidSet = new Set(processes.map((p) => p.pid));
@@ -140,7 +155,11 @@ export function ProcessTable({ processes }: ProcessTableProps) {
               return (
                 <tr
                   key={proc.pid}
-                  onClick={() => setSelectedPid(isSelected ? null : proc.pid)}
+                  onClick={() => {
+                    setSelectedPid(isSelected ? null : proc.pid);
+                    setConfirmKill(false);
+                    setSignalError(null);
+                  }}
                   className={`cursor-pointer transition-colors ${
                     isSelected ? "bg-indigo-500/10 border-l-2 border-indigo-500" : "hover:bg-[#232640]"
                   }`}
@@ -193,6 +212,74 @@ export function ProcessTable({ processes }: ProcessTableProps) {
               </svg>
             </button>
           </div>
+
+          {/* 액션 버튼 */}
+          {(() => {
+            const isStopped = selected.status.toLowerCase().includes("stop");
+            return (
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-[#2a2d3e]">
+                {/* 일시정지 / 재개 */}
+                {isStopped ? (
+                  <button
+                    onClick={() => sendSignal(selected.pid, "cont")}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-colors"
+                  >
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    재개
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => sendSignal(selected.pid, "stop")}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-gray-500/10 text-gray-300 hover:bg-gray-500/20 border border-gray-600 transition-colors"
+                  >
+                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
+                    일시정지
+                  </button>
+                )}
+
+                {/* 종료 요청 (SIGTERM) */}
+                <button
+                  onClick={() => sendSignal(selected.pid, "term")}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 border border-orange-500/20 transition-colors"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+                  종료 요청
+                </button>
+
+                {/* 강제 종료 (SIGKILL) */}
+                {confirmKill ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-red-400">강제 종료할까요?</span>
+                    <button
+                      onClick={() => sendSignal(selected.pid, "kill")}
+                      className="px-2 py-1 rounded text-[11px] font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30 transition-colors"
+                    >
+                      확인
+                    </button>
+                    <button
+                      onClick={() => setConfirmKill(false)}
+                      className="px-2 py-1 rounded text-[11px] text-gray-400 hover:text-white transition-colors"
+                    >
+                      취소
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmKill(true)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    강제 종료
+                  </button>
+                )}
+
+                {/* 에러 메시지 */}
+                {signalError && (
+                  <span className="text-[10px] text-red-400 ml-auto">{signalError}</span>
+                )}
+              </div>
+            );
+          })()}
 
           {/* 메트릭 그리드 */}
           <div className="grid grid-cols-4 gap-px bg-[#2a2d3e] border-b border-[#2a2d3e]">

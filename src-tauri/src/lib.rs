@@ -199,6 +199,33 @@ fn dir_size(path: &std::path::Path) -> u64 {
         .sum()
 }
 
+// 프로세스에 시그널 전송 (term/kill/stop/cont)
+#[tauri::command]
+fn signal_process(pid: u32, signal: String) -> Result<(), String> {
+    let sig_flag = match signal.as_str() {
+        "term" => "-TERM",
+        "kill" => "-KILL",
+        "stop" => "-STOP",
+        "cont" => "-CONT",
+        _ => return Err("알 수 없는 시그널".to_string()),
+    };
+    let output = std::process::Command::new("kill")
+        .arg(sig_flag)
+        .arg(pid.to_string())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let msg = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(if msg.is_empty() {
+            format!("종료 실패 (exit {})", output.status)
+        } else {
+            msg
+        })
+    }
+}
+
 // 디렉토리 크기 스트리밍 결과
 #[derive(Serialize, Clone)]
 struct DirSizeResult {
@@ -294,7 +321,7 @@ pub fn run() {
             Mutex::new(System::new_all()),
             Mutex::new(Users::new_with_refreshed_list()),
         ))
-        .invoke_handler(tauri::generate_handler![get_metrics, read_dir_entries, start_dir_sizes])
+        .invoke_handler(tauri::generate_handler![get_metrics, signal_process, read_dir_entries, start_dir_sizes])
         .run(tauri::generate_context!())
         .expect("Tauri 앱 실행 중 오류 발생");
 }
